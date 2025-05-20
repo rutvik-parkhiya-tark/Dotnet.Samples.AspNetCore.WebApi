@@ -1,0 +1,88 @@
+name: CI - .NET Web API
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-and-deploy:
+    runs-on: self-hosted
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+
+    - name: Run unit tests
+      run: dotnet test --verbosity normal
+
+    - name: Publish app
+      run: dotnet publish -c Release -o ./publish
+
+    - name: Deploy to IIS
+      shell: powershell
+      run: |
+        Import-Module WebAdministration
+        
+        $siteName = "MyWebApi"
+        $appPoolName = "MyWebApiAppPool"
+        $port = 5000
+        $publishFolder = "D:\Published Project\wwwroot\$siteName"
+
+        # Ensure publish directory exists
+        if (-not (Test-Path $publishFolder)) {
+          New-Item -Path $publishFolder -ItemType Directory
+        }
+
+        # 1. Create app pool if not exists
+        if (-not (Get-ChildItem IIS:\AppPools | Where-Object { $_.Name -eq $appPoolName })) {
+            New-WebAppPool -Name $appPoolName
+            Write-Host "App Pool '$appPoolName' created."
+        } else {
+            Write-Host "App Pool '$appPoolName' already exists."
+        }
+
+        # 2. Configure app pool for .NET Core (CLR empty)
+        Set-ItemProperty IIS:\AppPools\$appPoolName managedRuntimeVersion ""
+        Set-ItemProperty IIS:\AppPools\$appPoolName managedPipelineMode Integrated
+
+        # 3. Create or update IIS site
+        if (-not (Get-Website -Name $siteName -ErrorAction SilentlyContinue)) {
+            New-Website -Name $siteName -Port $port -PhysicalPath $publishFolder -ApplicationPool $appPoolName
+            Write-Host "Site '$siteName' created on port $port."
+        } else {
+            # Update physical path and app pool if site exists
+            Set-ItemProperty "IIS:\Sites\$siteName" -Name physicalPath -Value $publishFolder
+            Set-ItemProperty "IIS:\Sites\$siteName" -Name applicationPool -Value $appPoolName
+            Write-Host "Site '$siteName' updated with new physical path and app pool."
+        }
+
+        # 4. Set folder permissions for app pool identity
+        $acl = Get-Acl $publishFolder
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule("IIS AppPool\$appPoolName", "Read,ReadAndExecute,ListDirectory", "ContainerInherit,ObjectInherit", "None", "Allow")
+        $acl.SetAccessRule($rule)
+        Set-Acl $publishFolder $acl
+        Write-Host "Permissions set for IIS AppPool\$appPoolName on $publishFolder."
+
+        # 5. Copy new content to publish folder
+        Remove-Item "$publishFolder\*" -Recurse -Force -ErrorAction SilentlyContinue
+        Copy-Item -Path "./publish/*" -Destination $publishFolder -Recurse -Force
+        Write-Host "Published files copied."
+
+        # 6. Restart IIS site
+        Restart-WebItem "IIS:\Sites\$siteName"
+        Write-Host "Site '$siteName' restarted successfully."
+
+        Write-Host "==== Deployment completed! ===="
