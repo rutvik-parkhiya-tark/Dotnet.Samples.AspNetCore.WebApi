@@ -1,0 +1,31 @@
+name: Health Check
+
+on:
+  workflow_run:
+    workflows: ["CI - .NET Web API"]
+    types:
+      - completed
+
+jobs:
+  health-check:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: self-hosted
+
+    steps:
+    - name: Run health check
+      shell: powershell
+      run: |
+        Start-Sleep -Seconds 10
+        $url = "http://localhost:5069/health"
+        try {
+          $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10
+          if ($response.StatusCode -ne 200) {
+            Write-Error "Health check failed. Status code: $($response.StatusCode)"
+            exit 1
+          } else {
+            Write-Host "Health check passed with status code: $($response.StatusCode)"
+          }
+        } catch {
+          Write-Error "Health check failed. $_"
+          exit 1
+        }

@@ -1,0 +1,50 @@
+name: CI - .NET Web API
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-and-deploy:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+
+    - name: Run unit tests
+      run: dotnet test --verbosity normal
+
+    - name: Publish app
+      run: dotnet publish -c Release -o ./published
+
+    - name: Deploy to QA environment
+      shell: powershell
+      run: |
+        Import-Module WebAdministration
+        $source = "${{ github.workspace }}\published"
+        $site = "qa"
+        $destination = "D:\Published Project\qa\app"
+        .\scripts\deploy-to-iis.ps1 -SourcePath $source -SiteName $site -DestinationPath $destination
+
+    - name: Deploy to preview environment
+      shell: powershell
+      run: |
+        Import-Module WebAdministration
+        $source = "${{ github.workspace }}\published"
+        $site = "preview"
+        $destination = "D:\Published Project\preview\app"
+        .\scripts\deploy-to-iis.ps1 -SourcePath $source -SiteName $site -DestinationPath $destination
